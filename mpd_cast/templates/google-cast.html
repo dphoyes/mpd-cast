@@ -1,0 +1,32 @@
+<html>
+<head>
+  <script type="text/javascript"
+      src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js">
+  </script>
+</head>
+<body>
+  <cast-media-player></cast-media-player>
+  <script>
+    const context = cast.framework.CastReceiverContext.getInstance();
+    const playerManager = context.getPlayerManager();
+
+    const C = cast.framework.messages.Command;
+    playerManager.setSupportedMediaCommands(C.ALL_BASIC_MEDIA | C.QUEUE_PREV | C.QUEUE_NEXT);
+
+    const MPD_NAMESPACE = "urn:x-cast:io.github.dphoyes";
+
+    context.addCustomMessageListener(MPD_NAMESPACE, function(customEvent) {
+      console.log("Got a custom channel message:");
+      console.log(customEvent);
+    });
+
+    playerManager.setMessageInterceptor(cast.framework.messages.MessageType.QUEUE_UPDATE, queueUpdateRequestData => {
+      console.log(queueUpdateRequestData);
+      context.sendCustomMessage(MPD_NAMESPACE, undefined, queueUpdateRequestData);
+      return null;
+    });
+
+    context.start();
+  </script>
+</body>
+</html>
