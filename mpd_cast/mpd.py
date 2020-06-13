@@ -37,9 +37,8 @@ def record_factory(*args, **kwargs):
 
 logger = Logger(__name__)
 logging.basicConfig(
-    format='[%(asctime)s %(levelname)-8s %(instance_name)s%(name)s]: %(message)s',
+    format='[%(levelname)-8s %(instance_name)s%(name)s]: %(message)s',
     level=logging.INFO,
-    datefmt='%Y-%m-%d %H:%M:%S',
 )
 logging.getLogger(__name__).setLevel(logging.INFO)
 logging.getLogger('mpdserver').setLevel(logging.INFO)
