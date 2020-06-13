@@ -43,6 +43,7 @@ logging.basicConfig(
 )
 logging.getLogger(__name__).setLevel(logging.INFO)
 logging.getLogger('mpdserver').setLevel(logging.INFO)
+logging.getLogger('zeroconf').setLevel(logging.DEBUG)
 logging.getLogger('pychromecast.discovery').setLevel(logging.DEBUG)
 logging.getLogger('pychromecast.socket_client').setLevel(logging.DEBUG)
 
