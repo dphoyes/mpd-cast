@@ -19,6 +19,7 @@ import mimetypes
 from contextvars import ContextVar
 from mpdserver import mpdclient
 from mpdserver.logging import Logger
+import zeroconf
 import pychromecast.discovery
 import pychromecast.controllers.media
 
@@ -53,19 +54,26 @@ class PlayState(enum.Enum):
     pause = enum.auto()
 
 
-CastHost = collections.namedtuple('CastHost', 'ip_address port uuid model_name friendly_name')
+CastService = collections.namedtuple('CastHost', 'services, uuid, model_name, friendly_name, ip_address, port')
 
 
-async def discover_chromecasts():
+async def discover_chromecasts(zconf):
 
-    def on_add(name):
-        changes.put_nowait(('+', CastHost(*listener.services[name])))
+    def on_add(uuid, name):
+        logger.info("Discovered chromecast added: {}, {}", uuid, name)
+        changes.put_nowait(('+', CastService(*listener.services[uuid])))
 
-    def on_remove(name, service):
-        changes.put_nowait(('-', CastHost(*service)))
+    def on_update(uuid, name):
+        logger.info("Discovered chromecast updated: {}, {}", uuid, name)
+        changes.put_nowait(('-+', CastService(*listener.services[uuid])))
+
+    def on_remove(uuid, name, service):
+        logger.info("Discovered chromecast removed: {}, {}", uuid, name)
+        changes.put_nowait(('-', CastService(*service)))
 
     changes = queue.SimpleQueue()
-    listener, browser = pychromecast.discovery.start_discovery(on_add, on_remove)
+    listener = pychromecast.CastListener(on_add, on_remove, on_update)
+    browser = pychromecast.discovery.start_discovery(listener, zconf)
 
     try:
         while True:
@@ -512,9 +520,10 @@ class Client(mpdserver.MpdClientHandler):
 
 
 class Server(mpdserver.MpdServer):
-    outputs: Dict[int, CastHost]
+    outputs: Dict[int, CastService]
     output_id_by_uuid: Dict[str, int]
     current_output_id: Optional[int] = None
+    zconf: zeroconf.Zeroconf
     cast_app_id: str
     web_host: str
     cast: Optional[pychromecast.Chromecast] = None
@@ -536,6 +545,7 @@ class Server(mpdserver.MpdServer):
         self.default_partition = default_partition
         self.outputs = main.outputs
         self.output_id_by_uuid = main.output_id_by_uuid
+        self.zconf = main.zconf
         self.cast_app_id = main.args.app_id
         self.web_host = main.args.web_host
         self.cast_status_thread_queue = queue.SimpleQueue()
@@ -743,7 +753,7 @@ class Server(mpdserver.MpdServer):
         # Start a session
         if self.cast is None and self.current_output_id is not None and self.play_state == PlayState.play:
             logger.info("Starting Chromecast app")
-            self.cast = pychromecast.get_chromecast_from_host(self.outputs[self.current_output_id])
+            self.cast = pychromecast.get_chromecast_from_service(self.outputs[self.current_output_id], self.zconf)
 
             def blocking_launch():
                 logger.info("Waiting for cast")
@@ -871,8 +881,9 @@ class MainProgram:
     args: argparse.Namespace
     local_hostname: str
     child_servers: Dict[int, Server]
-    outputs: Dict[int, CastHost]
+    outputs: Dict[int, CastService]
     output_id_by_uuid: Dict[str, int]
+    zconf: zeroconf.Zeroconf
 
     @staticmethod
     def main():
@@ -889,6 +900,7 @@ class MainProgram:
         self.child_servers = {}
         self.outputs = {}
         self.output_id_by_uuid = {}
+        self.zconf = zeroconf.Zeroconf()
 
     @staticmethod
     def parse_args():
@@ -921,21 +933,21 @@ class MainProgram:
             await tg.spawn(self.discover_chromecasts)
 
     async def discover_chromecasts(self):
-        async for change, cast_host in discover_chromecasts():
-            if change == '+':
+        async for change, cast_service in discover_chromecasts(self.zconf):
+            if change in {'+', '-+'}:
                 try:
-                    oid = self.output_id_by_uuid[cast_host.uuid]
+                    oid = self.output_id_by_uuid[cast_service.uuid]
                 except KeyError:
-                    oid = self.output_id_by_uuid[cast_host.uuid] = len(self.output_id_by_uuid)
-                self.outputs[oid] = cast_host
-                logger.info('Found chromecast {}', cast_host.friendly_name)
+                    oid = self.output_id_by_uuid[cast_service.uuid] = len(self.output_id_by_uuid)
+                self.outputs[oid] = cast_service
+                logger.info('Found chromecast {}', cast_service.friendly_name)
             elif change == '-':
                 try:
-                    oid = self.output_id_by_uuid[cast_host.uuid]
+                    oid = self.output_id_by_uuid[cast_service.uuid]
                     del self.outputs[oid]
                 except KeyError:
                     pass
-                logger.info('Lost chromecast {}', cast_host.friendly_name)
+                logger.info('Lost chromecast {}', cast_service.friendly_name)
             else:
                 raise AssertionError
             for s in self.child_servers.values():
