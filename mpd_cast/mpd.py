@@ -369,9 +369,6 @@ class Client(mpdserver.MpdClientHandler):
             async def handle_args(self, oid):
                 if self.server.current_output_id == oid:
                     self.server.current_output_id = None
-                    if self.server.play_state == PlayState.play:
-                        self.server.play_state = PlayState.pause
-                        await self.server.notify_idle('player')
                     await self.server.notify_idle('output')
                     await self.server.trigger_cast_state_update.set()
 
@@ -382,9 +379,6 @@ class Client(mpdserver.MpdClientHandler):
             async def handle_args(self, oid):
                 if self.server.current_output_id == oid:
                     self.server.current_output_id = None
-                    if self.server.play_state == PlayState.play:
-                        self.server.play_state = PlayState.pause
-                        await self.server.notify_idle('player')
                 else:
                     assert oid in self.server.outputs
                     self.server.current_output_id = oid
@@ -739,12 +733,12 @@ class Server(mpdserver.MpdServer):
             )
             if disconnected:
                 logger.info("__keep_updating_cast_state: disconnected, playstate={}", self.play_state)
-            if disconnected and self.play_state == PlayState.play:
-                logger.info("  therefore pausing")
+            if (disconnected or self.current_output_id is None) and self.play_state == PlayState.play:
+                logger.info("  pausing due to disconnection")
                 self.play_state = PlayState.pause
                 await self.notify_idle('player')
             if disconnected or self.current_output_id != self.output_id_by_uuid[self.cast.device.uuid]:
-                logger.info("  therefore exiting app")
+                logger.info("  exiting app due to disconnection")
                 await anyio.run_sync_in_worker_thread(self.sync_quit_our_cast_app)
                 logger.info("  app exited")
                 self.cast.__del__()
@@ -754,30 +748,38 @@ class Server(mpdserver.MpdServer):
 
         # Start a session
         if self.cast is None and self.current_output_id is not None and self.play_state == PlayState.play:
-            logger.info("Starting Chromecast app")
-            self.cast = pychromecast.get_chromecast_from_service(self.outputs[self.current_output_id], self.zconf)
+            try:
+                output = self.outputs[self.current_output_id]
+            except KeyError:
+                logger.info("Attempted to start Chromecast app, but the selected output is no longer visible")
+                self.play_state = PlayState.pause
+                self.current_output_id = None
+                await self.notify_idle('player')
+            else:
+                logger.info("Starting Chromecast app")
+                self.cast = pychromecast.get_chromecast_from_service(output, self.zconf)
 
-            def blocking_launch():
-                logger.info("Waiting for cast")
-                self.cast.wait()
-                controller = MpdCastController(app_id=self.cast_app_id)
-                self.cast.register_handler(controller)
-                q = queue.SimpleQueue()
-                controller.launch(lambda: q.put_nowait(None))
-                q.get()
+                def blocking_launch():
+                    logger.info("Waiting for cast")
+                    self.cast.wait()
+                    controller = MpdCastController(app_id=self.cast_app_id)
+                    self.cast.register_handler(controller)
+                    q = queue.SimpleQueue()
+                    controller.launch(lambda: q.put_nowait(None))
+                    q.get()
 
-                listener = CastListener(self.cast, self.cast.status.session_id, self.cast_status_thread_queue)
-                self.cast.register_status_listener(listener.register(new_cast_status=self.__handle_cast_receiver_status))
-                self.cast.register_launch_error_listener(listener.register(new_launch_error=self.__handle_cast_launch_error))
-                self.cast.register_connection_listener(listener.register(new_connection_status=self.__handle_cast_connection_status))
-                self.cast.media_controller.register_status_listener(listener.register(new_media_status=self.cast_media_status_queue.send))
-                controller.register_listener(listener.register(new_mpd_cast_message=self.__handle_mpd_cast_message))
+                    listener = CastListener(self.cast, self.cast.status.session_id, self.cast_status_thread_queue)
+                    self.cast.register_status_listener(listener.register(new_cast_status=self.__handle_cast_receiver_status))
+                    self.cast.register_launch_error_listener(listener.register(new_launch_error=self.__handle_cast_launch_error))
+                    self.cast.register_connection_listener(listener.register(new_connection_status=self.__handle_cast_connection_status))
+                    self.cast.media_controller.register_status_listener(listener.register(new_media_status=self.cast_media_status_queue.send))
+                    controller.register_listener(listener.register(new_mpd_cast_message=self.__handle_mpd_cast_message))
 
-                return controller
+                    return controller
 
-            self.cast_controller = await anyio.run_sync_in_worker_thread(blocking_launch)
-            self.cast_session_id = self.cast.status.session_id
-            logger.info("Launched Chromecast app")
+                self.cast_controller = await anyio.run_sync_in_worker_thread(blocking_launch)
+                self.cast_session_id = self.cast.status.session_id
+                logger.info("Launched Chromecast app")
 
         # Send state updates
         if self.cast is not None:
