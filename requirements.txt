@@ -1,5 +1,5 @@
-anyio==1.3.1
-trio
+anyio==2.0.2
+trio==0.17.0
 -e git+git@github.com:dphoyes/python-mpd-server.git@master#egg=python_mpd_server
 pychromecast==7.5.0
 zeroconf==0.28.5

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 import argparse
-import anyio
+import anyio.abc
+import anyio.streams.stapled
 import mpdserver
 import socket
 import enum
@@ -77,7 +78,7 @@ async def discover_chromecasts(zconf):
 
     try:
         while True:
-            yield await anyio.run_in_thread(changes.get, cancellable=True)
+            yield await anyio.run_sync_in_worker_thread(changes.get, cancellable=True)
     finally:
         pychromecast.discovery.stop_discovery(browser)
         changes.put_nowait(None)
@@ -488,7 +489,7 @@ class Client(mpdserver.MpdClientHandler):
                 vol /= 100
                 cast = self.server.cast
                 if cast is not None:
-                    await anyio.run_in_thread(lambda: cast.set_volume(vol))
+                    await anyio.run_sync_in_worker_thread(lambda: cast.set_volume(vol))
 
         @register
         class volume(Command):
@@ -498,7 +499,7 @@ class Client(mpdserver.MpdClientHandler):
                 change /= 100
                 cast = self.server.cast
                 if cast is not None:
-                    await anyio.run_in_thread(lambda: cast.set_volume(cast.status.volume_level + change))
+                    await anyio.run_sync_in_worker_thread(lambda: cast.set_volume(cast.status.volume_level + change))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -531,13 +532,13 @@ class Server(mpdserver.MpdServer):
     cast_session_id: Optional[str] = None
     saved_cast_media_status: Optional[pychromecast.controllers.media.MediaStatus] = None
     cast_status_thread_queue: queue.SimpleQueue
-    cast_media_status_queue: anyio.Queue
+    cast_media_status_queue: anyio.streams.stapled.StapledObjectStream
     proxy_mpd: mpdclient.MpdClient
     play_state: PlayState
     __current_time_override: Optional[float]
     __new_time_change: bool
     status_from_proxy: Dict[bytes, bytes]
-    trigger_cast_state_update: anyio.Event
+    trigger_cast_state_update: anyio.abc.Event
 
     def __init__(self, port, db, default_partition, main: MainProgram):
         super().__init__(port=port, ClientHandler=Client, Playlist=object)
@@ -549,7 +550,9 @@ class Server(mpdserver.MpdServer):
         self.cast_app_id = main.args.app_id
         self.web_host = main.args.web_host
         self.cast_status_thread_queue = queue.SimpleQueue()
-        self.cast_media_status_queue = anyio.create_queue(100)
+        self.cast_media_status_queue = anyio.streams.stapled.StapledObjectStream(
+            *anyio.create_memory_object_stream(100, item_type=pychromecast.controllers.media.MediaStatus)
+        )
         self.proxy_mpd = self.MpdProxyClient()
         self.play_state = PlayState.stop
         self.current_time = 0
@@ -655,7 +658,7 @@ class Server(mpdserver.MpdServer):
     async def __handle_cast_events_from_thread_queue(self):
         try:
             while True:
-                callback = await anyio.run_in_thread(self.cast_status_thread_queue.get, cancellable=True)
+                callback = await anyio.run_sync_in_worker_thread(self.cast_status_thread_queue.get, cancellable=True)
                 await callback()
         finally:
             self.cast_status_thread_queue.put_nowait(None)
@@ -663,7 +666,7 @@ class Server(mpdserver.MpdServer):
     async def __handle_cast_media_status(self):
         sent_next_for_finished_song = False
         while True:
-            status: pychromecast.controllers.media.MediaStatus = await self.cast_media_status_queue.get()
+            status: pychromecast.controllers.media.MediaStatus = await self.cast_media_status_queue.receive()
             logger.info("Received MEDIA STATUS: {}", status)
             if status.player_state == "UNKNOWN":
                 prev_state = self.saved_cast_media_status
@@ -716,7 +719,7 @@ class Server(mpdserver.MpdServer):
     async def __keep_updating_cast_state(self):
         while True:
             await self.trigger_cast_state_update.wait()
-            self.trigger_cast_state_update.clear()
+            self.trigger_cast_state_update = anyio.create_event()
 
             while True:
                 try:
@@ -743,7 +746,7 @@ class Server(mpdserver.MpdServer):
                 await self.notify_idle('player')
             if disconnected or self.current_output_id != self.output_id_by_uuid[self.cast.device.uuid]:
                 logger.info("  therefore exiting app")
-                await anyio.run_in_thread(self.sync_quit_our_cast_app)
+                await anyio.run_sync_in_worker_thread(self.sync_quit_our_cast_app)
                 logger.info("  app exited")
                 self.cast.__del__()
                 self.cast = None
@@ -768,12 +771,12 @@ class Server(mpdserver.MpdServer):
                 self.cast.register_status_listener(listener.register(new_cast_status=self.__handle_cast_receiver_status))
                 self.cast.register_launch_error_listener(listener.register(new_launch_error=self.__handle_cast_launch_error))
                 self.cast.register_connection_listener(listener.register(new_connection_status=self.__handle_cast_connection_status))
-                self.cast.media_controller.register_status_listener(listener.register(new_media_status=self.cast_media_status_queue.put))
+                self.cast.media_controller.register_status_listener(listener.register(new_media_status=self.cast_media_status_queue.send))
                 controller.register_listener(listener.register(new_mpd_cast_message=self.__handle_mpd_cast_message))
 
                 return controller
 
-            self.cast_controller = await anyio.run_in_thread(blocking_launch)
+            self.cast_controller = await anyio.run_sync_in_worker_thread(blocking_launch)
             self.cast_session_id = self.cast.status.session_id
             logger.info("Launched Chromecast app")
 
@@ -789,7 +792,7 @@ class Server(mpdserver.MpdServer):
                     media_controller.send_message(command, inc_session_id=True, callback_function=lambda data: ev.set())
                     ev.wait()
                 logger.info("Sending chromecast command {}", command)
-                await anyio.run_in_thread(run, cancellable=True)
+                await anyio.run_sync_in_worker_thread(run, cancellable=True)
                 logger.info("Done sending chromecast command {}", command)
 
             songid = self.status_from_proxy.get(b"songid")
