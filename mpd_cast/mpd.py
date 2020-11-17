@@ -269,7 +269,7 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class findadd(ListForwardedCommandWithStatusUpdate): pass
         @register
-        class list(ListForwardedCommand): pass
+        class List(ListForwardedCommand): pass
         @register
         class listall(ListForwardedCommand): pass
         @register
@@ -346,7 +346,7 @@ class Client(mpdserver.MpdClientHandler):
         class outputs(CommandItems):
             def items(self):
                 current_oid = self.server.current_output_id
-                for i, output in self.server.outputs.items():
+                for i, output in list(self.server.outputs.items()):
                     yield 'outputid', i
                     yield 'outputname', output.friendly_name
                     yield 'outputenabled', int(i == current_oid)
@@ -388,8 +388,7 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class status(CommandItems):
             def items(self):
-                for k, v in self.server.status_from_proxy.items():
-                    yield k, v
+                yield from list(self.server.status_from_proxy.items())
                 yield b'state', self.server.play_state.name
                 yield b'time', "{}:{}".format(
                     round(self.server.current_time),
