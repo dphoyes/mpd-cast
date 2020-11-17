@@ -676,7 +676,7 @@ class Server(mpdserver.MpdServer):
                     self.play_state = PlayState.play
                 elif status.player_is_idle:
                     logger.info("  player state idle because {}, already-sent-next={}", status.idle_reason, sent_next_for_finished_song)
-                    if status.idle_reason == 'FINISHED' and not sent_next_for_finished_song:
+                    if status.idle_reason in {'FINISHED', 'ERROR'} and not sent_next_for_finished_song:
                         sent_next_for_finished_song = True
                         await self.proxy_mpd.command_returning_nothing(b"next")
                 elif status.player_is_paused:
