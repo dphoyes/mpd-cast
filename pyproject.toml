@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "mpd-cast"
+version = "0.1.0"
+description = "MPD server for Chromecasts"
+authors = ["David Hoyes <dphoyes@gmail.com>"]
+license = "GPL-3.0-only"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+anyio = "2.0.2"
+trio = "0.17.0"
+zeroconf = "0.28.5"
+PyChromecast = "7.5.0"
+Flask = "^1.1.2"
+python-mpd-server = {git = "git@github.com:dphoyes/python-mpd-server.git", branch = "master"}
+
+[tool.poetry.dev-dependencies]
+
+[tool.poetry.scripts]
+mpd-cast = 'mpd_cast.mpd:MainProgram.main'
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
