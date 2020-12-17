@@ -174,7 +174,7 @@ six = ">=1.9"
 
 [[package]]
 name = "pychromecast"
-version = "7.5.0"
+version = "7.6.0"
 description = "Python module to talk to Google Chromecast."
 category = "main"
 optional = false
@@ -297,7 +297,7 @@ watchdog = ["watchdog"]
 
 [[package]]
 name = "zeroconf"
-version = "0.28.5"
+version = "0.28.7"
 description = "Pure Python Multicast DNS Service Discovery Library (Bonjour/Avahi compatible)"
 category = "main"
 optional = false
@@ -309,7 +309,7 @@ ifaddr = ">=0.1.7"
 [metadata]
 lock-version = "1.0"
 python-versions = "^3.9"
-content-hash = "918f28d083f44e903f89cf2556cff50ef61cb3f4e31330d80755621462746bdd"
+content-hash = "b915eedf8b8c8a579387bcfa25c12d25fdc8a6087a1c8642cd0205117cd89113"
 
 [metadata.files]
 anyio = [
@@ -458,8 +458,8 @@ protobuf = [
     {file = "protobuf-3.14.0.tar.gz", hash = "sha256:1d63eb389347293d8915fb47bee0951c7b5dab522a4a60118b9a18f33e21f8ce"},
 ]
 pychromecast = [
-    {file = "PyChromecast-7.5.0-py2.py3-none-any.whl", hash = "sha256:5dba13fa47ee83b08511231bcb35bdec0394a9f1338059e416e28047548795e4"},
-    {file = "PyChromecast-7.5.0.tar.gz", hash = "sha256:2f346a88ddc27a19cc68bc2d3e8929d89276298cb1c11871b82a87fbdafb95a8"},
+    {file = "PyChromecast-7.6.0-py2.py3-none-any.whl", hash = "sha256:7ad3a96b576cefa7a7b502600d8878300e81f32b2bb792bebd334ee122362183"},
+    {file = "PyChromecast-7.6.0.tar.gz", hash = "sha256:998851e615e41ff436780867de84adea0f1720b7a73822451bd9ff9a00c0e255"},
 ]
 pycparser = [
     {file = "pycparser-2.20-py2.py3-none-any.whl", hash = "sha256:7582ad22678f0fcd81102833f60ef8d0e57288b6b5fb00323d101be910e35705"},
@@ -495,6 +495,6 @@ werkzeug = [
     {file = "Werkzeug-1.0.1.tar.gz", hash = "sha256:6c80b1e5ad3665290ea39320b91e1be1e0d5f60652b964a3070216de83d2e47c"},
 ]
 zeroconf = [
-    {file = "zeroconf-0.28.5-py3-none-any.whl", hash = "sha256:f69cc7f9cc3b2a85c7f2cdafe2bb7fb00cf01604bc3df392f7ed5e3c303d7705"},
-    {file = "zeroconf-0.28.5.tar.gz", hash = "sha256:c08dbb90c116626cb6c5f19ebd14cd4846cffe7151f338c19215e6938d334980"},
+    {file = "zeroconf-0.28.7-py3-none-any.whl", hash = "sha256:9872b779cf290b6d623d3cb1024d5c88fd9b7c4b2dd35ce54397cf8887632ad1"},
+    {file = "zeroconf-0.28.7.tar.gz", hash = "sha256:f6effbe36b2b65bdc4c282d3d44a3dbf6f18ac5903a50a2a21928dd7e0a68d8c"},
 ]
