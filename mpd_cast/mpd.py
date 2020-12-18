@@ -19,6 +19,7 @@ import urllib.parse
 import mimetypes
 from contextvars import ContextVar
 from mpdserver import mpdclient
+from mpdserver import errors as mpderrors
 from mpdserver.logging import Logger
 import zeroconf
 import pychromecast.discovery
@@ -420,19 +421,24 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class pause(Command):
-            formatArg = {'state': int}
+            formatArg = {'state': mpdserver.OptInt}
 
-            async def handle_args(self, state):
+            async def handle_args(self, state=None):
                 if self.server.current_output_id is not None:
                     state_before = self.server.play_state
-                    if state==1:
+                    if state == 1:
                         if self.server.play_state == PlayState.play:
                             self.server.play_state = PlayState.pause
-                    elif state==0:
+                    elif state == 0:
                         if self.server.play_state == PlayState.pause:
                             self.server.play_state = PlayState.play
+                    elif state is None:
+                        if self.server.play_state == PlayState.play:
+                            self.server.play_state = PlayState.pause
+                        elif self.server.play_state == PlayState.pause:
+                            self.server.play_state = PlayState.play
                     else:
-                        raise Exception("Unexpected argument")
+                        raise mpderrors.InvalidArgumentValue("Boolean (0/1) expected", state)
                     if self.server.play_state is not state_before:
                         await self.server.notify_idle('player')
                         await self.server.trigger_cast_state_update.set()
