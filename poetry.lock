@@ -208,7 +208,7 @@ anyio = "*"
 
 [package.source]
 url = "git@github.com:dphoyes/python-mpd-server.git"
-reference = "aefb82fb31eab2da12b079a31994939a3b98e4ad"
+reference = "6d0babaacaf735cfeb03a5bbc092f62344122e4b"
 type = "git"
 
 [[package]]

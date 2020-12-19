@@ -353,7 +353,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class enableoutput(Command):
-            formatArg = [('oid', int)]
+            formatArg = {'oid': int}
 
             async def handle_args(self, oid):
                 if self.server.current_output_id != oid:
@@ -364,7 +364,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class disableoutput(Command):
-            formatArg = [('oid', int)]
+            formatArg = {'oid': int}
 
             async def handle_args(self, oid):
                 if self.server.current_output_id == oid:
@@ -374,7 +374,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class toggleoutput(Command):
-            formatArg = [('oid', int)]
+            formatArg = {'oid': int}
 
             async def handle_args(self, oid):
                 if self.server.current_output_id == oid:
@@ -420,7 +420,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class pause(Command):
-            formatArg = [('state', int)]
+            formatArg = {'state': int}
 
             async def handle_args(self, state):
                 if self.server.current_output_id is not None:
@@ -448,7 +448,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class seek(ForwardedCommandWithStatusUpdate):
-            formatArg = [("song", str), ("time", float)]
+            formatArg = {"song": str, "time": float}
 
             async def run(self):
                 async for x in super().run():
@@ -463,7 +463,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class seekcur(Command):
-            formatArg = [("time", str)]
+            formatArg = {"time": str}
 
             async def handle_args(self, time):
                 if time[0] in ('+', '-'):
@@ -475,7 +475,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class setvol(Command):
-            formatArg = [("vol", float)]
+            formatArg = {"vol": float}
 
             async def handle_args(self, vol):
                 vol /= 100
@@ -485,7 +485,7 @@ class Client(mpdserver.MpdClientHandler):
 
         @register
         class volume(Command):
-            formatArg = [("change", float)]
+            formatArg = {"change": float}
 
             async def handle_args(self, change):
                 change /= 100
