@@ -55,33 +55,41 @@ class PlayState(enum.Enum):
     pause = enum.auto()
 
 
-CastService = collections.namedtuple('CastHost', 'services, uuid, model_name, friendly_name, ip_address, port')
+class ChromecastDiscoveryListener(pychromecast.discovery.AbstractCastListener):
+    def __init__(self):
+        self.change_q = queue.SimpleQueue()
+
+    def attach_browser(self, browser):
+        self.browser = browser
+
+    def add_cast(self, uuid, service):
+        """Called when a new cast has beeen discovered."""
+        logger.info("Discovered chromecast added: {}, {}", uuid, service)
+        self.change_q.put_nowait(('+', self.browser.devices[uuid]))
+
+    def update_cast(self, uuid, service):
+        """Called when a cast has beeen updated (MDNS info renewed or changed)."""
+        logger.info("Discovered chromecast updated: {}, {}", uuid, service)
+        self.change_q.put_nowait(('-+', self.browser.devices[uuid]))
+
+    def remove_cast(self, uuid, service, cast_info):
+        """Called when a cast has beeen lost (MDNS info expired or host down)."""
+        logger.info("Discovered chromecast removed: {}, {}", uuid, service)
+        self.change_q.put_nowait(('-', cast_info))
 
 
 async def discover_chromecasts(zconf):
-
-    def on_add(uuid, service):
-        logger.info("Discovered chromecast added: {}, {}", uuid, service)
-        changes.put_nowait(('+', CastService(*listener.services[uuid])))
-
-    def on_update(uuid, service):
-        logger.info("Discovered chromecast updated: {}, {}", uuid, service)
-        changes.put_nowait(('-+', CastService(*listener.services[uuid])))
-
-    def on_remove(uuid, service, cast_info):
-        logger.info("Discovered chromecast removed: {}, {}", uuid, service)
-        changes.put_nowait(('-', CastService(*cast_info)))
-
-    changes = queue.SimpleQueue()
-    listener = pychromecast.CastListener(on_add, on_remove, on_update)
-    browser = pychromecast.discovery.start_discovery(listener, zconf)
+    listener = ChromecastDiscoveryListener()
+    browser = pychromecast.discovery.CastBrowser(listener, zconf)
+    listener.attach_browser(browser)
+    browser.start_discovery()
 
     try:
         while True:
-            yield await anyio.run_sync_in_worker_thread(changes.get, cancellable=True)
+            yield await anyio.run_sync_in_worker_thread(listener.change_q.get, cancellable=True)
     finally:
-        pychromecast.discovery.stop_discovery(browser)
-        changes.put_nowait(None)
+        browser.stop_discovery()
+        listener.change_q.put_nowait(None)
 
 
 class CastListener:
@@ -519,7 +527,7 @@ class Client(mpdserver.MpdClientHandler):
 
 
 class Server(mpdserver.MpdServer):
-    outputs: Dict[int, CastService]
+    outputs: Dict[int, pychromecast.discovery.CastInfo]
     output_id_by_uuid: Dict[str, int]
     current_output_id: Optional[int] = None
     zconf: zeroconf.Zeroconf
@@ -762,7 +770,7 @@ class Server(mpdserver.MpdServer):
                 await self.notify_idle('player')
             else:
                 logger.info("Starting Chromecast app")
-                self.cast = pychromecast.get_chromecast_from_service(output, self.zconf)
+                self.cast = pychromecast.get_chromecast_from_cast_info(output, self.zconf)
 
                 def blocking_launch():
                     logger.info("Waiting for cast")
@@ -890,7 +898,7 @@ class MainProgram:
     args: argparse.Namespace
     local_hostname: str
     child_servers: Dict[int, Server]
-    outputs: Dict[int, CastService]
+    outputs: Dict[int, pychromecast.discovery.CastInfo]
     output_id_by_uuid: Dict[str, int]
     zconf: zeroconf.Zeroconf
 
