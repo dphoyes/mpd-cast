@@ -2,3 +2,4 @@
 /.venv/
 /mpd_cast/__pycache__/
 *.egg-info/
+poetry.toml
