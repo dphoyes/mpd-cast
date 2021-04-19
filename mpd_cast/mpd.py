@@ -60,17 +60,17 @@ CastService = collections.namedtuple('CastHost', 'services, uuid, model_name, fr
 
 async def discover_chromecasts(zconf):
 
-    def on_add(uuid, name):
-        logger.info("Discovered chromecast added: {}, {}", uuid, name)
+    def on_add(uuid, service):
+        logger.info("Discovered chromecast added: {}, {}", uuid, service)
         changes.put_nowait(('+', CastService(*listener.services[uuid])))
 
-    def on_update(uuid, name):
-        logger.info("Discovered chromecast updated: {}, {}", uuid, name)
+    def on_update(uuid, service):
+        logger.info("Discovered chromecast updated: {}, {}", uuid, service)
         changes.put_nowait(('-+', CastService(*listener.services[uuid])))
 
-    def on_remove(uuid, name, service):
-        logger.info("Discovered chromecast removed: {}, {}", uuid, name)
-        changes.put_nowait(('-', CastService(*service)))
+    def on_remove(uuid, service, cast_info):
+        logger.info("Discovered chromecast removed: {}, {}", uuid, service)
+        changes.put_nowait(('-', CastService(*cast_info)))
 
     changes = queue.SimpleQueue()
     listener = pychromecast.CastListener(on_add, on_remove, on_update)
