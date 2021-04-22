@@ -7,7 +7,7 @@ license = "GPL-3.0-only"
 
 [tool.poetry.dependencies]
 python = "^3.9"
-anyio = "^2.0.0"
+anyio = {git = "git@github.com:agronholm/anyio.git", tag = "3.0.0rc4"}
 trio = "^0.18.0"
 PyChromecast = "^9.1.0"
 Flask = "^1.1.2"

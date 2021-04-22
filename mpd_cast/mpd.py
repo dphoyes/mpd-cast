@@ -90,7 +90,7 @@ async def discover_chromecasts(zconf):
 
     try:
         while True:
-            yield await anyio.run_sync_in_worker_thread(listener.change_q.get, cancellable=True)
+            yield await anyio.to_thread.run_sync(listener.change_q.get, cancellable=True)
     finally:
         browser.stop_discovery()
         listener.change_q.put_nowait(None)
@@ -372,8 +372,8 @@ class Client(mpdserver.MpdClientHandler):
                 if self.server.current_output_id != oid:
                     assert oid in self.server.outputs
                     self.server.current_output_id = oid
-                    await self.server.notify_idle('output')
-                    await self.server.trigger_cast_state_update.set()
+                    self.server.notify_idle('output')
+                    self.server.trigger_cast_state_update.set()
 
         @register
         class disableoutput(Command):
@@ -382,8 +382,8 @@ class Client(mpdserver.MpdClientHandler):
             async def handle_args(self, oid):
                 if self.server.current_output_id == oid:
                     self.server.current_output_id = None
-                    await self.server.notify_idle('output')
-                    await self.server.trigger_cast_state_update.set()
+                    self.server.notify_idle('output')
+                    self.server.trigger_cast_state_update.set()
 
         @register
         class toggleoutput(Command):
@@ -395,8 +395,8 @@ class Client(mpdserver.MpdClientHandler):
                 else:
                     assert oid in self.server.outputs
                     self.server.current_output_id = oid
-                await self.server.notify_idle('output')
-                await self.server.trigger_cast_state_update.set()
+                self.server.notify_idle('output')
+                self.server.trigger_cast_state_update.set()
 
         @register
         class status(CommandItems):
@@ -424,8 +424,8 @@ class Client(mpdserver.MpdClientHandler):
                     yield x
                 if self.server.current_output_id is not None:
                     self.server.play_state = PlayState.play
-                    await self.server.notify_idle('player')
-                    await self.server.trigger_cast_state_update.set()
+                    self.server.notify_idle('player')
+                    self.server.trigger_cast_state_update.set()
 
         @register
         class playid(play):
@@ -452,8 +452,8 @@ class Client(mpdserver.MpdClientHandler):
                     else:
                         raise mpderrors.InvalidArgumentValue("Boolean (0/1) expected", state)
                     if self.server.play_state is not state_before:
-                        await self.server.notify_idle('player')
-                        await self.server.trigger_cast_state_update.set()
+                        self.server.notify_idle('player')
+                        self.server.trigger_cast_state_update.set()
 
         @register
         class stop(Command):
@@ -461,8 +461,8 @@ class Client(mpdserver.MpdClientHandler):
                 if self.server.play_state != PlayState.stop:
                     self.server.play_state = PlayState.stop
                     self.server.current_time = 0
-                    await self.server.notify_idle('player')
-                    await self.server.trigger_cast_state_update.set()
+                    self.server.notify_idle('player')
+                    self.server.trigger_cast_state_update.set()
 
         @register
         class seek(ForwardedCommandWithStatusUpdate):
@@ -472,8 +472,8 @@ class Client(mpdserver.MpdClientHandler):
                 async for x in super().run():
                     yield x
                 self.server.current_time = self.parse_args()['time']
-                await self.server.notify_idle('player')
-                await self.server.trigger_cast_state_update.set()
+                self.server.notify_idle('player')
+                self.server.trigger_cast_state_update.set()
 
         @register
         class seekid(seek):
@@ -488,8 +488,8 @@ class Client(mpdserver.MpdClientHandler):
                     self.server.current_time += float(time)
                 else:
                     self.server.current_time = float(time)
-                await self.server.notify_idle('player')
-                await self.server.trigger_cast_state_update.set()
+                self.server.notify_idle('player')
+                self.server.trigger_cast_state_update.set()
 
         @register
         class setvol(Command):
@@ -499,7 +499,7 @@ class Client(mpdserver.MpdClientHandler):
                 vol /= 100
                 cast = self.server.cast
                 if cast is not None:
-                    await anyio.run_sync_in_worker_thread(lambda: cast.set_volume(vol))
+                    await anyio.to_thread.run_sync(lambda: cast.set_volume(vol))
 
         @register
         class volume(Command):
@@ -509,7 +509,7 @@ class Client(mpdserver.MpdClientHandler):
                 change /= 100
                 cast = self.server.cast
                 if cast is not None:
-                    await anyio.run_sync_in_worker_thread(lambda: cast.set_volume(cast.status.volume_level + change))
+                    await anyio.to_thread.run_sync(lambda: cast.set_volume(cast.status.volume_level + change))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -524,10 +524,10 @@ class Client(mpdserver.MpdClientHandler):
                             pass
                 except ConnectionError:
                     logger.info("Client: Lost connection with proxy mpd")
-                    await tg.cancel_scope.cancel()
-            await tg.spawn(background)
+                    tg.cancel_scope.cancel()
+            tg.start_soon(background)
             await super().run()
-            await tg.cancel_scope.cancel()
+            tg.cancel_scope.cancel()
 
 
 class Server(mpdserver.MpdServer):
@@ -567,14 +567,14 @@ class Server(mpdserver.MpdServer):
         self.play_state = PlayState.stop
         self.current_time = 0
         self.status_from_proxy = {}
-        self.trigger_cast_state_update = anyio.create_event()
+        self.trigger_cast_state_update = anyio.Event()
 
     async def run(self):
         InstanceName.set(f"Instance{self.port}")
         async with anyio.create_task_group() as tg:
-            await tg.spawn(self.__background)
+            tg.start_soon(self.__background)
             await super().run()
-            await tg.cancel_scope.cancel()
+            tg.cancel_scope.cancel()
 
     def MpdProxyClient(self):
         return mpdclient.MpdClient(**self.db, default_partition=self.default_partition)
@@ -595,12 +595,12 @@ class Server(mpdserver.MpdServer):
             try:
                 async with self.proxy_mpd:
                     async with anyio.create_task_group() as tg:
-                        await tg.spawn(self.__forward_idle)
-                        await tg.spawn(self.__handle_proxy_output)
-                        await tg.spawn(self.__handle_proxy_status)
-                        await tg.spawn(self.__keep_updating_cast_state)
-                        await tg.spawn(self.__handle_cast_events_from_thread_queue)
-                        await tg.spawn(self.__handle_cast_media_status)
+                        tg.start_soon(self.__forward_idle)
+                        tg.start_soon(self.__handle_proxy_output)
+                        tg.start_soon(self.__handle_proxy_status)
+                        tg.start_soon(self.__keep_updating_cast_state)
+                        tg.start_soon(self.__handle_cast_events_from_thread_queue)
+                        tg.start_soon(self.__handle_cast_media_status)
             except ConnectionError:
                 logger.info("Server: Lost connection with proxy mpd")
                 await anyio.sleep(1)
@@ -611,7 +611,7 @@ class Server(mpdserver.MpdServer):
             "subscription", "message", "mixer",
             initial_trigger=True,
         ):
-            await self.notify_idle(subsystem)
+            self.notify_idle(subsystem)
 
     async def __handle_proxy_output(self):
         async for subsystem in self.proxy_mpd.idle("output", initial_trigger=True):
@@ -638,9 +638,9 @@ class Server(mpdserver.MpdServer):
                     await self.proxy_mpd.command_returning_nothing(b"play")
                     logger.info("Taken proxy mpd out of 'stop' state")
             if 'player' in changed:
-                await self.trigger_cast_state_update.set()
+                self.trigger_cast_state_update.set()
             for c in changed:
-                await self.notify_idle(c)
+                self.notify_idle(c)
 
     async def update_status_from_proxy(self):
         status = await self.proxy_mpd.command_returning_raw_object(b"status")
@@ -662,13 +662,13 @@ class Server(mpdserver.MpdServer):
         ) if k in status}
         if b"songid" not in status and self.play_state != PlayState.stop:
             self.play_state = PlayState.stop
-            await self.notify_idle("player")
+            self.notify_idle("player")
         return status
 
     async def __handle_cast_events_from_thread_queue(self):
         try:
             while True:
-                callback = await anyio.run_sync_in_worker_thread(self.cast_status_thread_queue.get, cancellable=True)
+                callback = await anyio.to_thread.run_sync(self.cast_status_thread_queue.get, cancellable=True)
                 await callback()
         finally:
             self.cast_status_thread_queue.put_nowait(None)
@@ -684,7 +684,7 @@ class Server(mpdserver.MpdServer):
                 if prev_state is not None and prev_state.player_state != "UNKNOWN":
                     logger.info("  previous state wasn't")
                     self.current_time = self.current_time
-                    await self.trigger_cast_state_update.set()
+                    self.trigger_cast_state_update.set()
                 self.saved_cast_media_status = status
             else:
                 self.saved_cast_media_status = status
@@ -702,11 +702,11 @@ class Server(mpdserver.MpdServer):
                     self.play_state = PlayState.pause
                 else:
                     raise AssertionError
-            await self.notify_idle('player')
+            self.notify_idle('player')
 
     async def __handle_cast_receiver_status(self, status):
         logger.info("Received RECEIVER STATUS: {}", status)
-        await self.notify_idle("mixer")
+        self.notify_idle("mixer")
 
     async def __handle_cast_launch_error(self, status):
         logger.info("Received LAUNCH ERROR: {}", status)
@@ -729,7 +729,7 @@ class Server(mpdserver.MpdServer):
     async def __keep_updating_cast_state(self):
         while True:
             await self.trigger_cast_state_update.wait()
-            self.trigger_cast_state_update = anyio.create_event()
+            self.trigger_cast_state_update = anyio.Event()
 
             while True:
                 try:
@@ -753,10 +753,10 @@ class Server(mpdserver.MpdServer):
             if (disconnected or self.current_output_id is None) and self.play_state == PlayState.play:
                 logger.info("  pausing due to disconnection")
                 self.play_state = PlayState.pause
-                await self.notify_idle('player')
+                self.notify_idle('player')
             if disconnected or self.current_output_id != self.output_id_by_uuid[self.cast.device.uuid]:
                 logger.info("  exiting app due to disconnection")
-                await anyio.run_sync_in_worker_thread(self.sync_quit_our_cast_app)
+                await anyio.to_thread.run_sync(self.sync_quit_our_cast_app)
                 logger.info("  app exited")
                 self.cast.__del__()
                 self.cast = None
@@ -771,7 +771,7 @@ class Server(mpdserver.MpdServer):
                 logger.info("Attempted to start Chromecast app, but the selected output is no longer visible")
                 self.play_state = PlayState.pause
                 self.current_output_id = None
-                await self.notify_idle('player')
+                self.notify_idle('player')
             else:
                 logger.info("Starting Chromecast app")
                 self.cast = pychromecast.get_chromecast_from_cast_info(output, self.zconf)
@@ -794,7 +794,7 @@ class Server(mpdserver.MpdServer):
 
                     return controller
 
-                self.cast_controller = await anyio.run_sync_in_worker_thread(blocking_launch)
+                self.cast_controller = await anyio.to_thread.run_sync(blocking_launch)
                 self.cast_session_id = self.cast.status.session_id
                 logger.info("Launched Chromecast app")
 
@@ -810,7 +810,7 @@ class Server(mpdserver.MpdServer):
                     media_controller.send_message(command, inc_session_id=True, callback_function=lambda data: ev.set())
                     ev.wait()
                 logger.info("Sending chromecast command {}", command)
-                await anyio.run_sync_in_worker_thread(run, cancellable=True)
+                await anyio.to_thread.run_sync(run, cancellable=True)
                 logger.info("Done sending chromecast command {}", command)
 
             songid = self.status_from_proxy.get(b"songid")
@@ -950,8 +950,8 @@ class MainProgram:
                     default_partition=f"mpd-cast-{self.local_hostname}-{p}",
                     main=self,
                 )
-                await tg.spawn(server.run)
-            await tg.spawn(self.discover_chromecasts)
+                tg.start_soon(server.run)
+            tg.start_soon(self.discover_chromecasts)
 
     async def discover_chromecasts(self):
         async for change, cast_service in discover_chromecasts(self.zconf):
@@ -972,7 +972,7 @@ class MainProgram:
             else:
                 raise AssertionError
             for s in self.child_servers.values():
-                await s.notify_idle('output')
+                s.notify_idle('output')
 
 
 if __name__ == "__main__":
