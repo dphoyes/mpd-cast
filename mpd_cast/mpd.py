@@ -6,9 +6,7 @@ import argparse
 import anyio.abc
 import anyio.streams.stapled
 import mpdserver
-import socket
 import enum
-import collections
 import functools
 import re
 import logging
@@ -29,16 +27,23 @@ with warnings.catch_warnings():
     import pychromecast.discovery
     import pychromecast.controllers.media
 
-InstanceName = ContextVar('instance_name')
+CurrentInstance = ContextVar('current_instance')
 
 old_log_record_factory = logging.getLogRecordFactory()
 @logging.setLogRecordFactory
 def record_factory(*args, **kwargs):
     record = old_log_record_factory(*args, **kwargs)
     try:
-        record.instance_name = InstanceName.get() + '@'
+        current_instance = CurrentInstance.get()
     except LookupError:
         record.instance_name = ''
+    else:
+        if isinstance(current_instance, Client):
+            record.instance_name = f"Partition-{current_instance.partition.name}@"
+        elif isinstance(current_instance, Partition):
+            record.instance_name = f"Partition-{current_instance.name}@"
+        else:
+            raise TypeError
     return record
 
 
@@ -155,14 +160,14 @@ class Client(mpdserver.MpdClientHandler):
 
         class ForwardedCommandWithStatusUpdate(ForwardedCommand):
             async def run(self):
-                songid = self.server.status_from_proxy.get(b"songid")
+                songid = self.partition.status_from_proxy.get(b"songid")
                 try:
                     async for line in super().run():
                         yield line
                 finally:
-                    await self.server.update_status_from_proxy()
-                    if songid != self.server.status_from_proxy.get(b"songid"):
-                        self.server.current_time = 0
+                    await self.partition.update_status_from_proxy()
+                    if songid != self.partition.status_from_proxy.get(b"songid"):
+                        self.partition.current_time = 0
 
         class ListForwardedCommand(ForwardedCommand):
             class CommandListHandler(mpdserver.CommandListBase):
@@ -320,16 +325,6 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class tagtypes(ListForwardedCommand): pass
         @register
-        class partition(ListForwardedCommand): pass
-        @register
-        class listpartitions(ListForwardedCommand): pass
-        @register
-        class newpartition(ListForwardedCommand): pass
-        @register
-        class delpartition(ListForwardedCommand): pass
-        @register
-        class moveoutput(ListForwardedCommand): pass # TODO
-        @register
         class outputset(ListForwardedCommand): pass # TODO
         @register
         class config(ListForwardedCommand): pass # TODO
@@ -351,6 +346,52 @@ class Client(mpdserver.MpdClientHandler):
         class sendmessage(ListForwardedCommand): pass
 
         @register
+        class listpartitions(CommandItems):
+            def items(self):
+                for partition in self.server.partitions:
+                    yield b'partition', partition.name
+
+        @register
+        class newpartition(Command):
+            formatArg = {'name': str}
+
+            async def handle_args(self, name):
+                try:
+                    await self.server.partitions.new(name)
+                except KeyError:
+                    raise mpderrors.MpdCommandErrorCustom(f"name \"{name}\" already exists", error=mpderrors.Ack.ERROR_EXIST)
+
+        @register
+        class delpartition(Command):
+            formatArg = {'name': str}
+
+            async def handle_args(self, name):
+                try:
+                    p = self.server.partitions[name]
+                except KeyError:
+                    raise mpderrors.MpdCommandErrorCustom(f"partition \"{name}\" does not exist", error=mpderrors.Ack.ERROR_NO_EXIST)
+                if p is self.server.partitions["default"]:
+                    raise mpderrors.MpdCommandErrorCustom("cannot delete the default partition")
+                if len(p.clients):
+                    raise mpderrors.MpdCommandErrorCustom(f"partition \"{name}\" still has clients")
+                await self.server.partitions.delete(name)
+
+        @register
+        class partition(Command):
+            formatArg = {'name': str}
+
+            async def handle_args(self, name):
+                if self.client.partition.name != name:
+                    try:
+                        new_partition = self.server.partitions[name]
+                    except KeyError:
+                        raise mpderrors.MpdCommandErrorCustom(f"partition \"{name}\" does not exist", error=mpderrors.Ack.ERROR_NO_EXIST)
+                    self.client.partition = new_partition
+                    await self.client.proxy_mpd.partition(new_partition.remote_partition_name)
+                    for subsystem in ('playlist', 'player', 'mixer', 'output', 'options'):
+                        self.client.idle.notify(subsystem)
+
+        @register
         class urlhandlers(CommandItems):
             def items(self):
                 return []
@@ -358,8 +399,8 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class outputs(CommandItems):
             def items(self):
-                current_oid = self.server.current_output_id
-                for i, output in list(self.server.outputs.items()):
+                current_oid = self.partition.current_output_id
+                for i, output in list(self.partition.outputs.items()):
                     yield 'outputid', i
                     yield 'outputname', output.friendly_name
                     yield 'outputenabled', int(i == current_oid)
@@ -369,47 +410,48 @@ class Client(mpdserver.MpdClientHandler):
             formatArg = {'oid': int}
 
             async def handle_args(self, oid):
-                if self.server.current_output_id != oid:
-                    assert oid in self.server.outputs
-                    self.server.current_output_id = oid
-                    self.server.notify_idle('output')
-                    self.server.trigger_cast_state_update.set()
+                if self.partition.current_output_id != oid:
+                    assert oid in self.partition.outputs
+                    self.partition.current_output_id = oid
+                    self.partition.notify_idle('output')
+                    self.partition.trigger_cast_state_update.set()
 
         @register
         class disableoutput(Command):
             formatArg = {'oid': int}
 
             async def handle_args(self, oid):
-                if self.server.current_output_id == oid:
-                    self.server.current_output_id = None
-                    self.server.notify_idle('output')
-                    self.server.trigger_cast_state_update.set()
+                if self.partition.current_output_id == oid:
+                    self.partition.current_output_id = None
+                    self.partition.notify_idle('output')
+                    self.partition.trigger_cast_state_update.set()
 
         @register
         class toggleoutput(Command):
             formatArg = {'oid': int}
 
             async def handle_args(self, oid):
-                if self.server.current_output_id == oid:
-                    self.server.current_output_id = None
+                if self.partition.current_output_id == oid:
+                    self.partition.current_output_id = None
                 else:
-                    assert oid in self.server.outputs
-                    self.server.current_output_id = oid
-                self.server.notify_idle('output')
-                self.server.trigger_cast_state_update.set()
+                    assert oid in self.partition.outputs
+                    self.partition.current_output_id = oid
+                self.partition.notify_idle('output')
+                self.partition.trigger_cast_state_update.set()
 
         @register
         class status(CommandItems):
             def items(self):
-                yield from list(self.server.status_from_proxy.items())
-                yield b'state', self.server.play_state.name
+                yield b'partition', self.partition.name
+                yield from list(self.partition.status_from_proxy.items())
+                yield b'state', self.partition.play_state.name
                 yield b'time', "{}:{}".format(
-                    round(self.server.current_time),
-                    round(float(self.server.status_from_proxy.get(b'duration', b'0').decode('utf8')))
+                    round(self.partition.current_time),
+                    round(float(self.partition.status_from_proxy.get(b'duration', b'0').decode('utf8')))
                 )
-                yield b'elapsed', self.server.current_time
+                yield b'elapsed', self.partition.current_time
                 try:
-                    status = self.server.cast.status
+                    status = self.partition.cast.status
                     yield b'volume', round(status.volume_level * 100) * (not status.volume_muted)
                 except AttributeError:
                     yield b'volume', -1
@@ -422,10 +464,10 @@ class Client(mpdserver.MpdClientHandler):
             async def run(self):
                 async for x in super().run():
                     yield x
-                if self.server.current_output_id is not None:
-                    self.server.play_state = PlayState.play
-                    self.server.notify_idle('player')
-                    self.server.trigger_cast_state_update.set()
+                if self.partition.current_output_id is not None:
+                    self.partition.play_state = PlayState.play
+                    self.partition.notify_idle('player')
+                    self.partition.trigger_cast_state_update.set()
 
         @register
         class playid(play):
@@ -436,33 +478,33 @@ class Client(mpdserver.MpdClientHandler):
             formatArg = {'state': mpdserver.OptInt}
 
             async def handle_args(self, state=None):
-                if self.server.current_output_id is not None:
-                    state_before = self.server.play_state
+                if self.partition.current_output_id is not None:
+                    state_before = self.partition.play_state
                     if state == 1:
-                        if self.server.play_state == PlayState.play:
-                            self.server.play_state = PlayState.pause
+                        if self.partition.play_state == PlayState.play:
+                            self.partition.play_state = PlayState.pause
                     elif state == 0:
-                        if self.server.play_state == PlayState.pause:
-                            self.server.play_state = PlayState.play
+                        if self.partition.play_state == PlayState.pause:
+                            self.partition.play_state = PlayState.play
                     elif state is None:
-                        if self.server.play_state == PlayState.play:
-                            self.server.play_state = PlayState.pause
-                        elif self.server.play_state == PlayState.pause:
-                            self.server.play_state = PlayState.play
+                        if self.partition.play_state == PlayState.play:
+                            self.partition.play_state = PlayState.pause
+                        elif self.partition.play_state == PlayState.pause:
+                            self.partition.play_state = PlayState.play
                     else:
                         raise mpderrors.InvalidArgumentValue("Boolean (0/1) expected", state)
-                    if self.server.play_state is not state_before:
-                        self.server.notify_idle('player')
-                        self.server.trigger_cast_state_update.set()
+                    if self.partition.play_state is not state_before:
+                        self.partition.notify_idle('player')
+                        self.partition.trigger_cast_state_update.set()
 
         @register
         class stop(Command):
             async def handle_args(self):
-                if self.server.play_state != PlayState.stop:
-                    self.server.play_state = PlayState.stop
-                    self.server.current_time = 0
-                    self.server.notify_idle('player')
-                    self.server.trigger_cast_state_update.set()
+                if self.partition.play_state != PlayState.stop:
+                    self.partition.play_state = PlayState.stop
+                    self.partition.current_time = 0
+                    self.partition.notify_idle('player')
+                    self.partition.trigger_cast_state_update.set()
 
         @register
         class seek(ForwardedCommandWithStatusUpdate):
@@ -471,9 +513,9 @@ class Client(mpdserver.MpdClientHandler):
             async def run(self):
                 async for x in super().run():
                     yield x
-                self.server.current_time = self.parse_args()['time']
-                self.server.notify_idle('player')
-                self.server.trigger_cast_state_update.set()
+                self.partition.current_time = self.parse_args()['time']
+                self.partition.notify_idle('player')
+                self.partition.trigger_cast_state_update.set()
 
         @register
         class seekid(seek):
@@ -485,11 +527,11 @@ class Client(mpdserver.MpdClientHandler):
 
             async def handle_args(self, time):
                 if time[0] in ('+', '-'):
-                    self.server.current_time += float(time)
+                    self.partition.current_time += float(time)
                 else:
-                    self.server.current_time = float(time)
-                self.server.notify_idle('player')
-                self.server.trigger_cast_state_update.set()
+                    self.partition.current_time = float(time)
+                self.partition.notify_idle('player')
+                self.partition.trigger_cast_state_update.set()
 
         @register
         class setvol(Command):
@@ -497,7 +539,7 @@ class Client(mpdserver.MpdClientHandler):
 
             async def handle_args(self, vol):
                 vol /= 100
-                cast = self.server.cast
+                cast = self.partition.cast
                 if cast is not None:
                     await anyio.to_thread.run_sync(lambda: cast.set_volume(vol))
 
@@ -507,15 +549,23 @@ class Client(mpdserver.MpdClientHandler):
 
             async def handle_args(self, change):
                 change /= 100
-                cast = self.server.cast
+                cast = self.partition.cast
                 if cast is not None:
                     await anyio.to_thread.run_sync(lambda: cast.set_volume(cast.status.volume_level + change))
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, default_partition, **kwargs):
         super().__init__(*args, **kwargs)
-        self.proxy_mpd = self.server.MpdProxyClient()
+        self.default_partition_name = default_partition
+        self.proxy_mpd = None
 
     async def run(self):
+        try:
+            self.partition = self.server.partitions[self.default_partition_name]
+        except KeyError:
+            self.partition = await self.server.partitions.new(self.default_partition_name)
+        CurrentInstance.set(self)
+
+        self.proxy_mpd = self.partition.MpdProxyClient()
         async with anyio.create_task_group() as tg:
             async def background():
                 try:
@@ -530,7 +580,7 @@ class Client(mpdserver.MpdClientHandler):
             tg.cancel_scope.cancel()
 
 
-class Server(mpdserver.MpdServer):
+class Partition(mpdserver.MpdPartition):
     outputs: Dict[int, pychromecast.discovery.CastInfo]
     output_id_by_uuid: Dict[str, int]
     current_output_id: Optional[int] = None
@@ -550,15 +600,14 @@ class Server(mpdserver.MpdServer):
     status_from_proxy: Dict[bytes, bytes]
     trigger_cast_state_update: anyio.abc.Event
 
-    def __init__(self, port, db, default_partition, main: MainProgram):
-        super().__init__(port=port, ClientHandler=Client, Playlist=object)
-        self.db = db
-        self.default_partition = default_partition
-        self.outputs = main.outputs
-        self.output_id_by_uuid = main.output_id_by_uuid
-        self.zconf = main.zconf
-        self.cast_app_id = main.args.app_id
-        self.web_host = main.args.web_host
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.db = self.server.db
+        self.outputs = self.server.main.outputs
+        self.output_id_by_uuid = self.server.main.output_id_by_uuid
+        self.zconf = self.server.main.zconf
+        self.cast_app_id = self.server.main.args.app_id
+        self.web_host = self.server.main.args.web_host
         self.cast_status_thread_queue = queue.SimpleQueue()
         self.cast_media_status_queue = anyio.streams.stapled.StapledObjectStream(
             *anyio.create_memory_object_stream(100, item_type=pychromecast.controllers.media.MediaStatus)
@@ -569,15 +618,21 @@ class Server(mpdserver.MpdServer):
         self.status_from_proxy = {}
         self.trigger_cast_state_update = anyio.Event()
 
-    async def run(self):
-        InstanceName.set(f"Instance{self.port}")
+    async def run(self, *, task_status=anyio.TASK_STATUS_IGNORED):
+        CurrentInstance.set(self)
         async with anyio.create_task_group() as tg:
-            tg.start_soon(self.__background)
-            await super().run()
+            await tg.start(self.__background)
+            await super().run(task_status=task_status)
             tg.cancel_scope.cancel()
+        async with mpdclient.MpdClient(**self.db, default_partition=None) as remote:
+            await remote.delpartition(self.remote_partition_name)
+
+    @property
+    def remote_partition_name(self):
+        return self.server.main.args.partition_prefix+self.name
 
     def MpdProxyClient(self):
-        return mpdclient.MpdClient(**self.db, default_partition=self.default_partition)
+        return mpdclient.MpdClient(**self.db, default_partition=self.remote_partition_name)
 
     @property
     def current_time(self):
@@ -590,7 +645,7 @@ class Server(mpdserver.MpdServer):
         self.__current_time_override = value
         self.__new_time_change = True
 
-    async def __background(self):
+    async def __background(self, *, task_status=anyio.TASK_STATUS_IGNORED):
         while True:
             try:
                 async with self.proxy_mpd:
@@ -601,6 +656,7 @@ class Server(mpdserver.MpdServer):
                         tg.start_soon(self.__keep_updating_cast_state)
                         tg.start_soon(self.__handle_cast_events_from_thread_queue)
                         tg.start_soon(self.__handle_cast_media_status)
+                        task_status.started()
             except ConnectionError:
                 logger.info("Server: Lost connection with proxy mpd")
                 await anyio.sleep(1)
@@ -727,19 +783,23 @@ class Server(mpdserver.MpdServer):
                         await self.proxy_mpd.command_returning_nothing(b"previous")
 
     async def __keep_updating_cast_state(self):
-        while True:
-            await self.trigger_cast_state_update.wait()
-            self.trigger_cast_state_update = anyio.Event()
-
+        try:
             while True:
-                try:
-                    await self.__attempt_update_cast_state()
-                except pychromecast.error.PyChromecastError as e:
-                    logger.warning("Retrying due to Chromecast error: {}", e)
-                    await anyio.sleep(1)
-                    continue
-                else:
-                    break
+                await self.trigger_cast_state_update.wait()
+                self.trigger_cast_state_update = anyio.Event()
+
+                while True:
+                    try:
+                        await self.__attempt_update_cast_state()
+                    except pychromecast.error.PyChromecastError as e:
+                        logger.warning("Retrying due to Chromecast error: {}", e)
+                        await anyio.sleep(1)
+                        continue
+                    else:
+                        break
+        finally:
+            with anyio.fail_after(5, shield=True):
+                await self.quit_our_cast_app()
 
     async def __attempt_update_cast_state(self):
         # End the current session if needed
@@ -756,7 +816,7 @@ class Server(mpdserver.MpdServer):
                 self.notify_idle('player')
             if disconnected or self.current_output_id != self.output_id_by_uuid[self.cast.device.uuid]:
                 logger.info("  exiting app due to disconnection")
-                await anyio.to_thread.run_sync(self.sync_quit_our_cast_app)
+                await self.quit_our_cast_app()
                 logger.info("  app exited")
                 self.cast.__del__()
                 self.cast = None
@@ -890,35 +950,57 @@ class Server(mpdserver.MpdServer):
             if not self.__new_time_change:
                 self.__current_time_override = None
 
-    def sync_quit_our_cast_app(self):
-        if self.cast is not None and self.cast.status.session_id == self.cast_session_id:
+    async def quit_our_cast_app(self):
+        if self.cast is not None and self.cast.status is not None and self.cast.status.session_id == self.cast_session_id:
             try:
-                self.cast.quit_app()
+                await anyio.to_thread.run_sync(self.cast.quit_app)
             except pychromecast.error.NotConnected:
                 pass
 
 
+class Server(mpdserver.MpdServer):
+    def __init__(self, ports, db, main):
+        super().__init__(ClientHandler=Client, Playlist=object, Partition=Partition)
+        self.ports = ports
+        self.db = db
+        self.main = main
+
+    async def init_partitions(self):
+        await super().init_partitions()
+        existing_names = {p.name for p in self.partitions}
+        async with mpdclient.MpdClient(**self.db) as remote:
+            for remote_partition in await remote.listpartitions():
+                if remote_partition.startswith(self.main.args.partition_prefix):
+                    local_partition = remote_partition.removeprefix(self.main.args.partition_prefix)
+                    if local_partition not in existing_names:
+                        await self.partitions.new(local_partition)
+                        existing_names.add(local_partition)
+
+    async def run_all_listeners(self):
+        logger.info("Mpd Server is listening on ports {}", ', '.join(str(k) for k in self.ports.keys()))
+
+        async with anyio.create_task_group() as tg:
+            for port, default_partition in self.ports.items():
+                tg.start_soon(functools.partial(
+                    self.run_listener,
+                    anyio.create_tcp_listener(local_port=port),
+                    default_partition=default_partition,
+                ))
+
+
 class MainProgram:
     args: argparse.Namespace
-    local_hostname: str
-    child_servers: Dict[int, Server]
+    server: Server
     outputs: Dict[int, pychromecast.discovery.CastInfo]
     output_id_by_uuid: Dict[str, int]
     zconf: zeroconf.Zeroconf
 
     @staticmethod
     def main():
-        main = MainProgram()
-        try:
-            anyio.run(main.run, backend='trio')
-        finally:
-            for s in main.child_servers.values():
-                s.sync_quit_our_cast_app()
+        anyio.run(MainProgram().run, backend='trio')
 
     def __init__(self):
         self.args = self.parse_args()
-        self.local_hostname = socket.gethostname()
-        self.child_servers = {}
         self.outputs = {}
         self.output_id_by_uuid = {}
         self.zconf = zeroconf.Zeroconf()
@@ -930,11 +1012,16 @@ class MainProgram:
         p.add_argument('--db', required=True)
         p.add_argument('--app-id', required=True)
         p.add_argument('--web-host', required=True)
+        p.add_argument('--partition-prefix', default="mpd-cast-")
         return p.parse_args()
+
+    @staticmethod
+    def parse_port(port, default_partition="default"):
+        return int(port), default_partition
 
     async def run(self):
         logger.debug("Starting main program")
-        ports = [int(p) for p in self.args.ports.split(',')]
+        ports = dict(self.parse_port(*p.split(':')) for p in self.args.ports.split(','))
         db_match = re.match(r"^(?P<host>[^:]+)(:(?P<port>\d+))$", self.args.db)
         if db_match:
             db = db_match.groupdict()
@@ -943,14 +1030,12 @@ class MainProgram:
         db["port"] = int(db.get("port", 6600))
 
         async with anyio.create_task_group() as tg:
-            for p in ports:
-                self.child_servers[p] = server = Server(
-                    port=p,
-                    db=db,
-                    default_partition=f"mpd-cast-{self.local_hostname}-{p}",
-                    main=self,
-                )
-                tg.start_soon(server.run)
+            self.server = Server(
+                ports=ports,
+                db=db,
+                main=self,
+            )
+            tg.start_soon(self.server.run)
             tg.start_soon(self.discover_chromecasts)
 
     async def discover_chromecasts(self):
@@ -971,8 +1056,7 @@ class MainProgram:
                 logger.info('Lost chromecast {}', cast_service.friendly_name)
             else:
                 raise AssertionError
-            for s in self.child_servers.values():
-                s.notify_idle('output')
+            self.server.notify_idle('output')
 
 
 if __name__ == "__main__":
