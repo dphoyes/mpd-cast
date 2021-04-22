@@ -15,6 +15,7 @@ import logging
 import threading
 import queue
 import copy
+import warnings
 import urllib.parse
 import mimetypes
 from contextvars import ContextVar
@@ -22,8 +23,11 @@ from mpdserver import mpdclient
 from mpdserver import errors as mpderrors
 from mpdserver.logging import Logger
 import zeroconf
-import pychromecast.discovery
-import pychromecast.controllers.media
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    import pychromecast.discovery
+    import pychromecast.controllers.media
 
 InstanceName = ContextVar('instance_name')
 
