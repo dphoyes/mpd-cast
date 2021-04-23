@@ -841,28 +841,27 @@ class Partition(mpdserver.MpdPartition):
                 self.current_output_id = None
                 self.notify_idle('player')
             else:
-                logger.info("Starting Chromecast app")
-                self.cast = pychromecast.get_chromecast_from_cast_info(output, self.zconf)
-
                 def blocking_launch():
+                    logger.info("Starting Chromecast app")
+                    cast = pychromecast.get_chromecast_from_cast_info(output, self.zconf)
                     logger.info("Waiting for cast")
-                    self.cast.wait()
+                    cast.wait()
                     controller = MpdCastController(app_id=self.cast_app_id)
-                    self.cast.register_handler(controller)
+                    cast.register_handler(controller)
                     q = queue.SimpleQueue()
                     controller.launch(lambda: q.put_nowait(None))
                     q.get()
 
-                    listener = CastListener(self.cast, self.cast.status.session_id, self.cast_status_thread_queue)
-                    self.cast.register_status_listener(listener.register(new_cast_status=self.__handle_cast_receiver_status))
-                    self.cast.register_launch_error_listener(listener.register(new_launch_error=self.__handle_cast_launch_error))
-                    self.cast.register_connection_listener(listener.register(new_connection_status=self.__handle_cast_connection_status))
-                    self.cast.media_controller.register_status_listener(listener.register(new_media_status=self.cast_media_status_queue.send))
+                    listener = CastListener(cast, cast.status.session_id, self.cast_status_thread_queue)
+                    cast.register_status_listener(listener.register(new_cast_status=self.__handle_cast_receiver_status))
+                    cast.register_launch_error_listener(listener.register(new_launch_error=self.__handle_cast_launch_error))
+                    cast.register_connection_listener(listener.register(new_connection_status=self.__handle_cast_connection_status))
+                    cast.media_controller.register_status_listener(listener.register(new_media_status=self.cast_media_status_queue.send))
                     controller.register_listener(listener.register(new_mpd_cast_message=self.__handle_mpd_cast_message))
 
-                    return controller
+                    return cast, controller
 
-                self.cast_controller = await anyio.to_thread.run_sync(blocking_launch)
+                self.cast, self.cast_controller = await anyio.to_thread.run_sync(blocking_launch)
                 self.cast_session_id = self.cast.status.session_id
                 logger.info("Launched Chromecast app")
 
