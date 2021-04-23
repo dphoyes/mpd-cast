@@ -198,7 +198,7 @@ anyio = "*"
 type = "git"
 url = "git@github.com:dphoyes/python-mpd-server.git"
 reference = "master"
-resolved_reference = "a0dbc86fc39ea5c29121df9386390eda580d509a"
+resolved_reference = "15b0f1ae6a11d4aa64ed8a8ebb5f0bf25dddf507"
 
 [[package]]
 name = "requests"

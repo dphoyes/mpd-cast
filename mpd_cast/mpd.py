@@ -13,6 +13,7 @@ import logging
 import threading
 import queue
 import copy
+import contextlib
 import warnings
 import urllib.parse
 import mimetypes
@@ -162,8 +163,9 @@ class Client(mpdserver.MpdClientHandler):
             async def run(self):
                 songid = self.partition.status_from_proxy.get(b"songid")
                 try:
-                    async for line in super().run():
-                        yield line
+                    async with contextlib.aclosing(super().run()) as iter_lines:
+                        async for line in iter_lines:
+                            yield line
                 finally:
                     await self.partition.update_status_from_proxy()
                     if songid != self.partition.status_from_proxy.get(b"songid"):
@@ -462,8 +464,9 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class play(ForwardedCommandWithStatusUpdate):
             async def run(self):
-                async for x in super().run():
-                    yield x
+                async with contextlib.aclosing(super().run()) as iter_x:
+                    async for x in iter_x:
+                        yield x
                 if self.partition.current_output_id is not None:
                     self.partition.play_state = PlayState.play
                     self.partition.notify_idle('player')
@@ -511,8 +514,9 @@ class Client(mpdserver.MpdClientHandler):
             formatArg = {"song": str, "time": float}
 
             async def run(self):
-                async for x in super().run():
-                    yield x
+                async with contextlib.aclosing(super().run()) as iter_x:
+                    async for x in iter_x:
+                        yield x
                 self.partition.current_time = self.parse_args()['time']
                 self.partition.notify_idle('player')
                 self.partition.trigger_cast_state_update.set()
@@ -570,8 +574,9 @@ class Client(mpdserver.MpdClientHandler):
             async def background():
                 try:
                     async with self.proxy_mpd:
-                        async for _ in self.proxy_mpd.idle("database"):
-                            pass
+                        async with contextlib.aclosing(self.proxy_mpd.idle("database")) as iter_idle:
+                            async for _ in iter_idle:
+                                pass
                 except ConnectionError:
                     logger.info("Client: Lost connection with proxy mpd")
                     tg.cancel_scope.cancel()
@@ -662,41 +667,44 @@ class Partition(mpdserver.MpdPartition):
                 await anyio.sleep(1)
 
     async def __forward_idle(self):
-        async for subsystem in self.proxy_mpd.idle(
+        async with contextlib.aclosing(self.proxy_mpd.idle(
             "database", "stored_playlist", "sticker", "partition",
             "subscription", "message", "mixer",
             initial_trigger=True,
-        ):
-            self.notify_idle(subsystem)
+        )) as iter_subsystems:
+            async for subsystem in iter_subsystems:
+                self.notify_idle(subsystem)
 
     async def __handle_proxy_output(self):
-        async for subsystem in self.proxy_mpd.idle("output", initial_trigger=True):
-            assert subsystem == "output", f"Got subsystem {subsystem}"
-            for output in await self.proxy_mpd.command_returning_raw_objects(b"outputs", delimiter=b"outputid"):
-                outputenabled = output[b"outputenabled"]
-                assert outputenabled in (b"0", b"1")
-                if output[b"outputenabled"] == b"1":
-                    await self.proxy_mpd.command_returning_nothing(b"disableoutput " + output[b"outputid"])
-                    logger.info("Disabled output of proxy mpd")
+        async with contextlib.aclosing(self.proxy_mpd.idle("output", initial_trigger=True)) as iter_subsystems:
+            async for subsystem in iter_subsystems:
+                assert subsystem == "output", f"Got subsystem {subsystem}"
+                for output in await self.proxy_mpd.command_returning_raw_objects(b"outputs", delimiter=b"outputid"):
+                    outputenabled = output[b"outputenabled"]
+                    assert outputenabled in (b"0", b"1")
+                    if output[b"outputenabled"] == b"1":
+                        await self.proxy_mpd.command_returning_nothing(b"disableoutput " + output[b"outputid"])
+                        logger.info("Disabled output of proxy mpd")
 
     async def __handle_proxy_status(self):
-        async for changed in self.proxy_mpd.idle(
+        async with contextlib.aclosing(self.proxy_mpd.idle(
             "player", "playlist", "options", "update",
             initial_trigger=True, split=False,
-        ):
-            changed = frozenset(changed)
-            assert changed <= {"player", "playlist", "options", "update"}, f"Got {changed}"
-            status = await self.update_status_from_proxy()
-            if self.play_state != PlayState.stop:
-                state = status[b"state"]
-                assert state in (b"stop", b"play", b"pause")
-                if state == b"stop":
-                    await self.proxy_mpd.command_returning_nothing(b"play")
-                    logger.info("Taken proxy mpd out of 'stop' state")
-            if 'player' in changed:
-                self.trigger_cast_state_update.set()
-            for c in changed:
-                self.notify_idle(c)
+        )) as iter_changed:
+            async for changed in iter_changed:
+                changed = frozenset(changed)
+                assert changed <= {"player", "playlist", "options", "update"}, f"Got {changed}"
+                status = await self.update_status_from_proxy()
+                if self.play_state != PlayState.stop:
+                    state = status[b"state"]
+                    assert state in (b"stop", b"play", b"pause")
+                    if state == b"stop":
+                        await self.proxy_mpd.command_returning_nothing(b"play")
+                        logger.info("Taken proxy mpd out of 'stop' state")
+                if 'player' in changed:
+                    self.trigger_cast_state_update.set()
+                for c in changed:
+                    self.notify_idle(c)
 
     async def update_status_from_proxy(self):
         status = await self.proxy_mpd.command_returning_raw_object(b"status")
@@ -1039,24 +1047,25 @@ class MainProgram:
             tg.start_soon(self.discover_chromecasts)
 
     async def discover_chromecasts(self):
-        async for change, cast_service in discover_chromecasts(self.zconf):
-            if change in {'+', '-+'}:
-                try:
-                    oid = self.output_id_by_uuid[cast_service.uuid]
-                except KeyError:
-                    oid = self.output_id_by_uuid[cast_service.uuid] = len(self.output_id_by_uuid)
-                self.outputs[oid] = cast_service
-                logger.info('Found chromecast {}', cast_service.friendly_name)
-            elif change == '-':
-                try:
-                    oid = self.output_id_by_uuid[cast_service.uuid]
-                    del self.outputs[oid]
-                except KeyError:
-                    pass
-                logger.info('Lost chromecast {}', cast_service.friendly_name)
-            else:
-                raise AssertionError
-            self.server.notify_idle('output')
+        async with contextlib.aclosing(discover_chromecasts(self.zconf)) as iter_changes:
+            async for change, cast_service in iter_changes:
+                if change in {'+', '-+'}:
+                    try:
+                        oid = self.output_id_by_uuid[cast_service.uuid]
+                    except KeyError:
+                        oid = self.output_id_by_uuid[cast_service.uuid] = len(self.output_id_by_uuid)
+                    self.outputs[oid] = cast_service
+                    logger.info('Found chromecast {}', cast_service.friendly_name)
+                elif change == '-':
+                    try:
+                        oid = self.output_id_by_uuid[cast_service.uuid]
+                        del self.outputs[oid]
+                    except KeyError:
+                        pass
+                    logger.info('Lost chromecast {}', cast_service.friendly_name)
+                else:
+                    raise AssertionError
+                self.server.notify_idle('output')
 
 
 if __name__ == "__main__":
