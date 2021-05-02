@@ -1,11 +1,10 @@
 [[package]]
 name = "anyio"
-version = "3.0.0rc4"
+version = "3.0.1"
 description = "High level compatibility layer for multiple asynchronous event loop implementations"
 category = "main"
 optional = false
 python-versions = ">=3.6.2"
-develop = false
 
 [package.dependencies]
 idna = ">=2.8"
@@ -15,12 +14,6 @@ sniffio = ">=1.1"
 doc = ["sphinx-rtd-theme", "sphinx-autodoc-typehints (>=1.2.0)"]
 test = ["coverage[toml] (>=4.5)", "hypothesis (>=4.0)", "pytest (>=6.0)", "trustme", "uvloop (<0.15)", "uvloop (>=0.15)"]
 trio = ["trio (>=0.16)"]
-
-[package.source]
-type = "git"
-url = "git@github.com:agronholm/anyio.git"
-reference = "3.0.0rc4"
-resolved_reference = "cfd8c04213e7ecd1796ae9e542d293d6630e80f4"
 
 [[package]]
 name = "async-generator"
@@ -279,10 +272,13 @@ ifaddr = ">=0.1.7"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "c1a4884afc0281c6c025b1014746a57e75cfad515c6a29bf58d0d8cd62463b60"
+content-hash = "fe953b802409ebec14222be8dffbf4325aebacd672ec81dd20b806fc3d691892"
 
 [metadata.files]
-anyio = []
+anyio = [
+    {file = "anyio-3.0.1-py3-none-any.whl", hash = "sha256:ed71f7542ef39875b65def219794d9dcb0a48c571317b13612c12b1f292701b5"},
+    {file = "anyio-3.0.1.tar.gz", hash = "sha256:1ef7622396ab55829d4236a6f75e2199df6d26a4ba79bea0cb942a5fd2f79a23"},
+]
 async-generator = [
     {file = "async_generator-1.10-py3-none-any.whl", hash = "sha256:01c7bf666359b4967d2cda0000cc2e4af16a0ae098cbffcb8472fb9e8ad6585b"},
     {file = "async_generator-1.10.tar.gz", hash = "sha256:6ebb3d106c12920aaae42ccb6f787ef5eefdcdd166ea3d628fa8476abe712144"},
