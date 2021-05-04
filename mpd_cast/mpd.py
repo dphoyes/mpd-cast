@@ -843,14 +843,23 @@ class Partition(mpdserver.MpdPartition):
             else:
                 def blocking_launch():
                     logger.info("Starting Chromecast app")
-                    cast = pychromecast.get_chromecast_from_cast_info(output, self.zconf)
+                    cast = pychromecast.get_chromecast_from_cast_info(
+                        cast_info=output,
+                        zconf=self.zconf,
+                        tries=1,
+                        timeout=10,
+                    )
                     logger.info("Waiting for cast")
-                    cast.wait()
+                    cast.wait(timeout=10)
                     controller = MpdCastController(app_id=self.cast_app_id)
                     cast.register_handler(controller)
                     q = queue.SimpleQueue()
+                    logger.info("About to launch cast app")
                     controller.launch(lambda: q.put_nowait(None))
-                    q.get()
+                    try:
+                        q.get(timeout=10)
+                    except queue.Empty as e:
+                        raise pychromecast.LaunchError("Timed out") from e
 
                     listener = CastListener(cast, cast.status.session_id, self.cast_status_thread_queue)
                     cast.register_status_listener(listener.register(new_cast_status=self.__handle_cast_receiver_status))
@@ -861,9 +870,15 @@ class Partition(mpdserver.MpdPartition):
 
                     return cast, controller
 
-                self.cast, self.cast_controller = await anyio.to_thread.run_sync(blocking_launch)
-                self.cast_session_id = self.cast.status.session_id
-                logger.info("Launched Chromecast app")
+                try:
+                    self.cast, self.cast_controller = await anyio.to_thread.run_sync(blocking_launch)
+                except (pychromecast.ChromecastConnectionError, pychromecast.LaunchError) as e:
+                    logger.info(f"Got {repr(type(e))}")
+                    self.play_state = PlayState.pause
+                    self.notify_idle('player')
+                else:
+                    self.cast_session_id = self.cast.status.session_id
+                    logger.info("Launched Chromecast app")
 
         # Send state updates
         if self.cast is not None:
@@ -958,8 +973,10 @@ class Partition(mpdserver.MpdPartition):
                 self.__current_time_override = None
 
     async def quit_our_cast_app(self):
+        logger.info("Called quit_our_cast_app")
         if self.cast is not None and self.cast.status is not None and self.cast.status.session_id == self.cast_session_id:
             try:
+                logger.info("Quitting app")
                 await anyio.to_thread.run_sync(self.cast.quit_app)
             except pychromecast.error.NotConnected:
                 pass
