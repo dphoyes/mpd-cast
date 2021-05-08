@@ -855,7 +855,11 @@ class Partition(mpdserver.MpdPartition):
                     cast.register_handler(controller)
                     q = queue.SimpleQueue()
                     logger.info("About to launch cast app")
-                    controller.launch(lambda: q.put_nowait(None))
+                    cast.socket_client.receiver_controller.launch_app(
+                        app_id=controller.supporting_app_id,
+                        force_launch=True,
+                        callback_function=lambda: q.put_nowait(None),
+                    )
                     try:
                         q.get(timeout=10)
                     except queue.Empty as e:
