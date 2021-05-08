@@ -577,7 +577,7 @@ class Client(mpdserver.MpdClientHandler):
                         async with contextlib.aclosing(self.proxy_mpd.idle("database")) as iter_idle:
                             async for _ in iter_idle:
                                 pass
-                except ConnectionError:
+                except (ConnectionError, anyio.BrokenResourceError):
                     logger.info("Client: Lost connection with proxy mpd")
                     tg.cancel_scope.cancel()
             tg.start_soon(background)
@@ -662,7 +662,7 @@ class Partition(mpdserver.MpdPartition):
                         tg.start_soon(self.__handle_cast_events_from_thread_queue)
                         tg.start_soon(self.__handle_cast_media_status)
                         task_status.started()
-            except ConnectionError:
+            except (ConnectionError, anyio.BrokenResourceError):
                 logger.info("Server: Lost connection with proxy mpd")
                 await anyio.sleep(1)
 
