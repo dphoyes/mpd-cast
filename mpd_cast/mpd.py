@@ -10,7 +10,6 @@ import enum
 import functools
 import re
 import logging
-import threading
 import queue
 import copy
 import contextlib
@@ -799,7 +798,7 @@ class Partition(mpdserver.MpdPartition):
                 while True:
                     try:
                         await self.__attempt_update_cast_state()
-                    except pychromecast.error.PyChromecastError as e:
+                    except (pychromecast.error.PyChromecastError, TimeoutError) as e:
                         logger.warning("Retrying due to Chromecast error: {}", e)
                         await anyio.sleep(1)
                         continue
@@ -863,7 +862,7 @@ class Partition(mpdserver.MpdPartition):
                     try:
                         q.get(timeout=10)
                     except queue.Empty as e:
-                        raise pychromecast.LaunchError("Timed out") from e
+                        raise TimeoutError from e
 
                     listener = CastListener(cast, cast.status.session_id, self.cast_status_thread_queue)
                     cast.register_status_listener(listener.register(new_cast_status=self.__handle_cast_receiver_status))
@@ -874,15 +873,9 @@ class Partition(mpdserver.MpdPartition):
 
                     return cast, controller
 
-                try:
-                    self.cast, self.cast_controller = await anyio.to_thread.run_sync(blocking_launch)
-                except (pychromecast.ChromecastConnectionError, pychromecast.LaunchError) as e:
-                    logger.info(f"Got {repr(type(e))}")
-                    self.play_state = PlayState.pause
-                    self.notify_idle('player')
-                else:
-                    self.cast_session_id = self.cast.status.session_id
-                    logger.info("Launched Chromecast app")
+                self.cast, self.cast_controller = await anyio.to_thread.run_sync(blocking_launch)
+                self.cast_session_id = self.cast.status.session_id
+                logger.info("Launched Chromecast app")
 
         # Send state updates
         if self.cast is not None:
@@ -892,9 +885,16 @@ class Partition(mpdserver.MpdPartition):
                 if media_session_id is not None and command["type"] != "LOAD":
                     command["mediaSessionId"] = media_session_id
                 def run():
-                    ev = threading.Event()
-                    media_controller.send_message(command, inc_session_id=True, callback_function=lambda data: ev.set())
-                    ev.wait()
+                    q = queue.SimpleQueue()
+                    media_controller.send_message(
+                        command,
+                        inc_session_id=True,
+                        callback_function=lambda data: q.put_nowait(None),
+                    )
+                    try:
+                        q.get(timeout=10)
+                    except queue.Empty as e:
+                        raise TimeoutError from e
                 logger.info("Sending chromecast command {}", command)
                 await anyio.to_thread.run_sync(run, cancellable=True)
                 logger.info("Done sending chromecast command {}", command)
