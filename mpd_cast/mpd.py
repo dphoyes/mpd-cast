@@ -577,7 +577,7 @@ class Client(mpdserver.MpdClientHandler):
                             async for _ in iter_idle:
                                 pass
                 except (ConnectionError, anyio.BrokenResourceError):
-                    logger.info("Client: Lost connection with proxy mpd")
+                    logger.info("Client lost connection with proxy mpd:", exc_info=True)
                     tg.cancel_scope.cancel()
             tg.start_soon(background)
             await super().run()
@@ -662,7 +662,7 @@ class Partition(mpdserver.MpdPartition):
                         tg.start_soon(self.__handle_cast_media_status)
                         task_status.started()
             except (ConnectionError, anyio.BrokenResourceError):
-                logger.info("Server: Lost connection with proxy mpd")
+                logger.info("Partition lost connection with proxy mpd:", exc_info=True)
                 await anyio.sleep(1)
 
     async def __forward_idle(self):
@@ -798,8 +798,8 @@ class Partition(mpdserver.MpdPartition):
                 while True:
                     try:
                         await self.__attempt_update_cast_state()
-                    except (pychromecast.error.PyChromecastError, TimeoutError) as e:
-                        logger.warning("Retrying due to Chromecast error: {}", e)
+                    except (pychromecast.error.PyChromecastError, TimeoutError):
+                        logger.warning("Retrying due to Chromecast error:", exc_info=True)
                         await anyio.sleep(1)
                         continue
                     else:
