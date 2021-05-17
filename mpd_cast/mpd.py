@@ -911,8 +911,11 @@ class Partition(mpdserver.MpdPartition):
 
             if self.play_state == PlayState.stop:
                 if self.cast.media_controller.status.player_state != "IDLE":
+                    state_before = self.cast.media_controller.status.player_state
                     await send_media_command({"type": "STOP"})
-                    assert self.cast.media_controller.status.player_state == "IDLE"
+                    assert self.cast.media_controller.status.player_state == "IDLE", (
+                        f"Expected player_state == IDLE, but it is {repr(self.cast.media_controller.status.player_state)} (was {repr(state_before)})"
+                    )
             elif songid == songid_currently_casting and not self.cast.media_controller.status.player_is_idle:
                 if current_time_override is not None:
                     await send_media_command({
