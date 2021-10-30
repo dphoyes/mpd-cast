@@ -940,14 +940,14 @@ class Partition(mpdserver.MpdPartition):
                     metadata["title"] = content_url
                 else:
                     quoted_filepath = urllib.parse.quote(filepath)
-                    content_url = f"https://{self.web_host}/media/{quoted_filepath}"
+                    content_url = f"{self.web_host}/media/{quoted_filepath}"
                     filepath_for_mime = filepath
                     metadata.update({
                         'metadataType': 3,
                         "title": song_info[b'Title'].decode('utf8'),
                         'albumName': song_info[b'Album'].decode('utf8'),
                         'artist': song_info[b'Artist'].decode('utf8'),
-                        'images': [{'url': f"https://{self.web_host}/albumart/{quoted_filepath}"}],
+                        'images': [{'url': f"{self.web_host}/albumart/{quoted_filepath}"}],
                     })
                 mime, _ = mimetypes.guess_type(filepath_for_mime)
                 assert mime is not None, "Couldn't guess mimetype for {}".format(filepath)
