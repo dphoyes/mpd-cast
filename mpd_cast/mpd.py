@@ -821,7 +821,7 @@ class Partition(mpdserver.MpdPartition):
                 logger.info("  pausing due to disconnection")
                 self.play_state = PlayState.pause
                 self.notify_idle('player')
-            if disconnected or self.current_output_id != self.output_id_by_uuid[self.cast.device.uuid]:
+            if disconnected or self.current_output_id != self.output_id_by_uuid[self.cast.uuid]:
                 logger.info("  exiting app due to disconnection")
                 await self.quit_our_cast_app()
                 logger.info("  app exited")
