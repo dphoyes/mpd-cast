@@ -1,6 +1,7 @@
 import os
 import flask
 import itertools
+from werkzeug.utils import safe_join
 from pathlib import Path
 
 app = flask.Flask(__name__)
@@ -19,7 +20,7 @@ def media(file_path):
 
 @app.route("/albumart/<path:given_path>")
 def albumart(given_path):
-    given_path = Path(flask.safe_join(MUSIC_DIRECTORY, given_path))
+    given_path = Path(safe_join(MUSIC_DIRECTORY, given_path))
     for parent_dir in itertools.chain((given_path,), given_path.parents):
         if parent_dir == MUSIC_DIRECTORY:
             break
