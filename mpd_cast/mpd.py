@@ -186,6 +186,8 @@ class Client(mpdserver.MpdClientHandler):
             pass
 
         @register
+        class clearerror(ListForwardedCommandWithStatusUpdate): pass
+        @register
         class currentsong(ListForwardedCommand): pass
         @register
         class stats(ListForwardedCommand): pass # TODO
@@ -260,6 +262,8 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class listplaylistinfo(ListForwardedCommand): pass
         @register
+        class searchplaylist(ListForwardedCommand): pass
+        @register
         class listplaylists(ListForwardedCommand): pass
         @register
         class load(ListForwardedCommandWithStatusUpdate): pass
@@ -269,6 +273,8 @@ class Client(mpdserver.MpdClientHandler):
         class playlistclear(ListForwardedCommand): pass
         @register
         class playlistdelete(ListForwardedCommand): pass
+        @register
+        class playlistlength(ListForwardedCommand): pass
         @register
         class playlistmove(ListForwardedCommand): pass
         @register
@@ -308,6 +314,8 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class searchaddpl(ListForwardedCommand): pass
         @register
+        class searchcount(ListForwardedCommand): pass
+        @register
         class update(ListForwardedCommandWithStatusUpdate): pass
         @register
         class rescan(ListForwardedCommandWithStatusUpdate): pass
@@ -322,9 +330,19 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class sticker(ListForwardedCommand): pass
         @register
+        class stickernames(ListForwardedCommand): pass
+        @register
+        class stickertypes(ListForwardedCommand): pass
+        @register
+        class stickernamestypes(ListForwardedCommand): pass
+        @register
         class ping(ListForwardedCommand): pass
         @register
+        class binarylimit(ListForwardedCommand): pass
+        @register
         class tagtypes(ListForwardedCommand): pass
+        @register
+        class protocol(ListForwardedCommand): pass
         @register
         class outputset(ListForwardedCommand): pass # TODO
         @register
@@ -461,6 +479,15 @@ class Client(mpdserver.MpdClientHandler):
                 yield b'mixrampdelay', 0
 
         @register
+        class getvol(CommandItems):
+            def items(self):
+                try:
+                    status = self.partition.cast.status
+                    yield b'volume', round(status.volume_level * 100) * (not status.volume_muted)
+                except AttributeError:
+                    yield b'volume', -1
+
+        @register
         class play(ForwardedCommandWithStatusUpdate):
             async def run(self):
                 async with contextlib.aclosing(super().run()) as iter_x:
@@ -555,6 +582,13 @@ class Client(mpdserver.MpdClientHandler):
                 cast = self.partition.cast
                 if cast is not None:
                     await anyio.to_thread.run_sync(lambda: cast.set_volume(cast.status.volume_level + change))
+
+        @register
+        class moveoutput(Command):
+            formatArg = {"output_name": str}
+
+            async def handle_args(self, output_name):
+                pass
 
     def __init__(self, *args, default_partition, **kwargs):
         super().__init__(*args, **kwargs)
