@@ -1,4 +1,6 @@
+/.DS_Store
 /.idea/
 /.venv/
 /mpd_cast/__pycache__/
+/tests/__pycache__/
 *.egg-info/
