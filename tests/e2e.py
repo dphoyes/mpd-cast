@@ -53,7 +53,7 @@ async def main():
                     try:
                         async with mpdclient.MpdClient('localhost', 6600):
                             break
-                    except (ConnectionRefusedError, OSError):
+                    except* OSError:
                         await anyio.sleep(1)
         except TimeoutError:
             sys.exit("Could not connect to mpd-cast server.")

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 import argparse
-import anyio.abc
 import anyio.streams.stapled
 import mpdserver
 import enum
@@ -640,7 +639,7 @@ class Partition(mpdserver.MpdPartition):
     __current_time_override: Optional[float]
     __new_time_change: bool
     status_from_proxy: Dict[bytes, bytes]
-    trigger_cast_state_update: anyio.abc.Event
+    trigger_cast_state_update: anyio.Event
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -652,7 +651,7 @@ class Partition(mpdserver.MpdPartition):
         self.web_host = self.server.main.args.web_host
         self.cast_status_thread_queue = queue.SimpleQueue()
         self.cast_media_status_queue = anyio.streams.stapled.StapledObjectStream(
-            *anyio.create_memory_object_stream(100, item_type=pychromecast.controllers.media.MediaStatus)
+            *anyio.create_memory_object_stream[pychromecast.controllers.media.MediaStatus](100)
         )
         self.proxy_mpd = self.MpdProxyClient()
         self.play_state = PlayState.stop
