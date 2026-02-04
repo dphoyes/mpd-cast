@@ -490,9 +490,13 @@ class Client(mpdserver.MpdClientHandler):
         @register
         class play(ForwardedCommandWithStatusUpdate):
             async def run(self):
-                async with contextlib.aclosing(super().run()) as iter_x:
-                    async for x in iter_x:
-                        yield x
+                try:
+                    async with contextlib.aclosing(super().run()) as iter_x:
+                        async for x in iter_x:
+                            yield x
+                except mpderrors.MpdCommandErrorCustom as e:
+                    if not re.match(r"ACK \[\d+@\d+\] \{[a-z]+\} All audio outputs are disabled", str(e)):
+                        raise
                 if self.partition.current_output_id is not None:
                     self.partition.play_state = PlayState.play
                     self.partition.notify_idle('player')
