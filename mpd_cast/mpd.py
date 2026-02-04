@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 import argparse
+import anyio
 import anyio.streams.stapled
 import mpdserver
 import enum
 import functools
+import signal
 import re
 import logging
 import queue
@@ -94,7 +96,7 @@ async def discover_chromecasts(zconf):
 
     try:
         while True:
-            yield await anyio.to_thread.run_sync(listener.change_q.get, cancellable=True)
+            yield await anyio.to_thread.run_sync(listener.change_q.get, abandon_on_cancel=True)
     finally:
         browser.stop_discovery()
         listener.change_q.put_nowait(None)
@@ -661,7 +663,10 @@ class Partition(mpdserver.MpdPartition):
 
     async def run(self, *, task_status=anyio.TASK_STATUS_IGNORED):
         CurrentInstance.set(self)
-        async with anyio.create_task_group() as tg:
+        async with (
+            self.cast_media_status_queue,
+            anyio.create_task_group() as tg,
+        ):
             await tg.start(self.__background)
             await super().run(task_status=task_status)
             tg.cancel_scope.cancel()
@@ -768,7 +773,7 @@ class Partition(mpdserver.MpdPartition):
     async def __handle_cast_events_from_thread_queue(self):
         try:
             while True:
-                callback = await anyio.to_thread.run_sync(self.cast_status_thread_queue.get, cancellable=True)
+                callback = await anyio.to_thread.run_sync(self.cast_status_thread_queue.get, abandon_on_cancel=True)
                 await callback()
         finally:
             self.cast_status_thread_queue.put_nowait(None)
@@ -933,7 +938,7 @@ class Partition(mpdserver.MpdPartition):
                     except queue.Empty as e:
                         raise TimeoutError from e
                 logger.info("Sending chromecast command {}", command)
-                await anyio.to_thread.run_sync(run, cancellable=True)
+                await anyio.to_thread.run_sync(run, abandon_on_cancel=True)
                 logger.info("Done sending chromecast command {}", command)
 
             songid = self.status_from_proxy.get(b"songid")
@@ -1105,6 +1110,15 @@ class MainProgram:
             )
             tg.start_soon(self.server.run)
             tg.start_soon(self.discover_chromecasts)
+
+            async def signal_handler():
+                with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGINT) as signals:
+                    async for signum in signals:
+                        logger.info("Received signal {}, shutting down...", signum)
+                        tg.cancel_scope.cancel()
+                        return
+
+            tg.start_soon(signal_handler)
 
     async def discover_chromecasts(self):
         async with contextlib.aclosing(discover_chromecasts(self.zconf)) as iter_changes:
