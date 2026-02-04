@@ -13,8 +13,6 @@ PyChromecast = "^10.3.0"
 Flask = "^2.0.3"
 python-mpd-server = {git = "git@github.com:dphoyes/python-mpd-server.git", branch = "master", develop = true}
 
-[tool.poetry.dev-dependencies]
-
 [tool.poetry.scripts]
 mpd-cast = 'mpd_cast.mpd:MainProgram.main'
 
